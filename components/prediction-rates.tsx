@@ -16,7 +16,11 @@ type SeriesPoint = { date: string; rate: number }
 type ChartPoint = { date: string; actual?: number | null; predicted?: number | null }
 
 const HISTORY_DAYS = 365
-const LSTM_WINDOW = 20
+const LSTM_WINDOW = 15
+const LSTM_TRAINING_POINTS = 120
+const LSTM_EPOCHS = 4
+const LSTM_BATCH_SIZE = 32
+const LSTM_UNITS = 8
 
 function difference(series: number[], d: number): number[] {
   let current = series.slice()
@@ -142,57 +146,90 @@ async function runArima(series: number[], horizon: number): Promise<number[]> {
 async function runLstm(series: number[], horizon: number): Promise<number[]> {
   const tf = await import("@tensorflow/tfjs")
 
-  if (series.length < LSTM_WINDOW + 1) {
-    return []
+  const runTraining = async () => {
+    await tf.ready()
+
+    if (series.length < LSTM_WINDOW + 1) {
+      return []
+    }
+
+    const trimmedSeries =
+      series.length > LSTM_TRAINING_POINTS ? series.slice(-LSTM_TRAINING_POINTS) : series
+
+    if (trimmedSeries.length < LSTM_WINDOW + 1) {
+      return []
+    }
+
+    const min = Math.min(...trimmedSeries)
+    const max = Math.max(...trimmedSeries)
+    const scale = max - min || 1
+    const normalized = trimmedSeries.map((v) => (v - min) / scale)
+
+    const xs: number[][] = []
+    const ys: number[] = []
+    for (let i = 0; i <= normalized.length - LSTM_WINDOW - 1; i += 1) {
+      xs.push(normalized.slice(i, i + LSTM_WINDOW))
+      ys.push(normalized[i + LSTM_WINDOW])
+    }
+
+    if (xs.length === 0 || ys.length === 0) {
+      return []
+    }
+
+    const xsTensor = tf.tensor3d(xs.map((row) => row.map((v) => [v])), [xs.length, LSTM_WINDOW, 1])
+    const ysTensor = tf.tensor2d(ys, [ys.length, 1])
+
+    const model = tf.sequential()
+    model.add(tf.layers.lstm({ units: LSTM_UNITS, inputShape: [LSTM_WINDOW, 1] }))
+    model.add(tf.layers.dense({ units: 1 }))
+    model.compile({ optimizer: tf.train.adam(0.005), loss: "meanSquaredError" })
+
+    await model.fit(xsTensor, ysTensor, {
+      epochs: LSTM_EPOCHS,
+      batchSize: LSTM_BATCH_SIZE,
+      verbose: 0,
+      callbacks:
+        typeof tf.callbacks?.earlyStopping === "function"
+          ? [tf.callbacks.earlyStopping({ monitor: "loss", patience: 1, minDelta: 1e-4 })]
+          : undefined,
+    })
+
+    xsTensor.dispose()
+    ysTensor.dispose()
+
+    const predictions: number[] = []
+    let window = normalized.slice(normalized.length - LSTM_WINDOW)
+
+    for (let i = 0; i < horizon; i += 1) {
+      const output = tf.tidy(() => {
+        const inputTensor = tf.tensor3d([window.map((v) => [v])], [1, LSTM_WINDOW, 1])
+        const outputTensor = model.predict(inputTensor) as typeof tf.Tensor
+        return outputTensor.dataSync()[0]
+      })
+      predictions.push(output * scale + min)
+
+      window = window.slice(1)
+      window.push(output)
+    }
+
+    model.dispose()
+    return predictions
   }
 
-  const min = Math.min(...series)
-  const max = Math.max(...series)
-  const scale = max - min || 1
-  const normalized = series.map((v) => (v - min) / scale)
-
-  const xs: number[][] = []
-  const ys: number[] = []
-  for (let i = 0; i <= normalized.length - LSTM_WINDOW - 1; i += 1) {
-    xs.push(normalized.slice(i, i + LSTM_WINDOW))
-    ys.push(normalized[i + LSTM_WINDOW])
+  try {
+    if (tf.getBackend() !== "webgl") {
+      await tf.setBackend("webgl")
+    }
+    return await runTraining()
+  } catch (error) {
+    try {
+      await tf.setBackend("cpu")
+      return await runTraining()
+    } catch (fallbackError) {
+      console.error("LSTM prediction failed.", fallbackError ?? error)
+      return []
+    }
   }
-
-  const xsTensor = tf.tensor3d(xs.map((row) => row.map((v) => [v])), [xs.length, LSTM_WINDOW, 1])
-  const ysTensor = tf.tensor2d(ys, [ys.length, 1])
-
-  const model = tf.sequential()
-  model.add(tf.layers.lstm({ units: 16, inputShape: [LSTM_WINDOW, 1] }))
-  model.add(tf.layers.dense({ units: 1 }))
-  model.compile({ optimizer: tf.train.adam(0.01), loss: "meanSquaredError" })
-
-  await model.fit(xsTensor, ysTensor, {
-    epochs: 20,
-    batchSize: 8,
-    verbose: 0,
-  })
-
-  xsTensor.dispose()
-  ysTensor.dispose()
-
-  const predictions: number[] = []
-  let window = normalized.slice(normalized.length - LSTM_WINDOW)
-
-  for (let i = 0; i < horizon; i += 1) {
-    const inputTensor = tf.tensor3d([window.map((v) => [v])], [1, LSTM_WINDOW, 1])
-    const outputTensor = model.predict(inputTensor) as typeof tf.Tensor
-    const output = (await outputTensor.data())[0]
-    predictions.push(output * scale + min)
-
-    window = window.slice(1)
-    window.push(output)
-
-    inputTensor.dispose()
-    outputTensor.dispose()
-  }
-
-  model.dispose()
-  return predictions
 }
 
 export function PredictionRates() {
