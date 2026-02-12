@@ -10,17 +10,19 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 // Define chart colors
 const COLORS = [
-  "hsl(var(--chart-1))",
-  "hsl(var(--chart-2))",
-  "hsl(var(--chart-3))",
-  "hsl(var(--chart-4))",
-  "hsl(var(--chart-5))",
-  "hsl(221.2, 83.2%, 53.3%)",
-  "hsl(262.1, 83.3%, 57.8%)",
-  "hsl(316.6, 73.3%, 52.5%)",
-  "hsl(4.8, 90.6%, 58.4%)",
-  "hsl(47.9, 95.8%, 53.1%)",
+  "#2563EB", // blue
+  "#16A34A", // green
+  "#F97316", // orange
+  "#DC2626", // red
+  "#8B5CF6", // purple
+  "#0EA5E9", // sky
+  "#EAB308", // yellow
+  "#EC4899", // pink
+  "#14B8A6", // teal
+  "#4B5563", // slate
 ]
+
+const toColorKey = (value: string) => value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")
 
 export function ExpenseChart() {
   const { expenses, userCurrency } = useAppContext()
@@ -121,7 +123,7 @@ export function ExpenseChart() {
         <ChartContainer
           config={Object.fromEntries(
             categoryData.map((entry, index) => [
-              entry.name,
+              toColorKey(entry.name),
               {
                 label: entry.name,
                 color: COLORS[index % COLORS.length],
@@ -142,7 +144,7 @@ export function ExpenseChart() {
                 dataKey="value"
               >
                 {categoryData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={`var(--color-${entry.name.replace(/\s+/g, "-").toLowerCase()})`} />
+                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                 ))}
               </Pie>
               <ChartTooltip

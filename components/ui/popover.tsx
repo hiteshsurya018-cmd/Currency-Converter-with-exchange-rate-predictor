@@ -3,9 +3,14 @@
 import * as React from "react"
 import * as PopoverPrimitive from "@radix-ui/react-popover"
 
+import { ClientOnly } from "@/components/ui/client-only"
 import { cn } from "@/lib/utils"
 
-const Popover = PopoverPrimitive.Root
+const Popover = (props: React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Root>) => (
+  <ClientOnly>
+    <PopoverPrimitive.Root {...props} />
+  </ClientOnly>
+)
 
 const PopoverTrigger = PopoverPrimitive.Trigger
 

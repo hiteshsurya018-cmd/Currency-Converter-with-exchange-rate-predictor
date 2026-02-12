@@ -71,11 +71,7 @@ export function ReceiptScanner() {
     setDetectedTotalLine(null)
 
     try {
-      const worker = await createWorker()
-      await worker.load()
-      await worker.loadLanguage("eng")
-      await worker.initialize("eng")
-
+      const worker = await createWorker("eng")
       const { data } = await worker.recognize(image)
       setExtractedText(data.text)
 
@@ -178,9 +174,10 @@ export function ReceiptScanner() {
         description: "Text extracted from image",
       })
     } catch (error) {
+      console.error("Receipt scan failed.", error)
       toast({
         title: "Error",
-        description: "Failed to scan image. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to scan image. Please try again.",
         variant: "destructive",
       })
     } finally {
@@ -309,18 +306,6 @@ export function ReceiptScanner() {
                       Reset
                     </Button>
                   </div>
-                </div>
-              )}
-
-              {extractedText && (
-                <div className="space-y-2">
-                  <Label htmlFor="extracted-text">Extracted Text</Label>
-                  <Textarea
-                    id="extracted-text"
-                    value={extractedText}
-                    readOnly
-                    className="h-[100px] font-mono text-xs"
-                  />
                 </div>
               )}
 
