@@ -4,9 +4,14 @@ import * as React from "react"
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu"
 import { Check, ChevronRight, Circle } from "lucide-react"
 
+import { ClientOnly } from "@/components/ui/client-only"
 import { cn } from "@/lib/utils"
 
-const DropdownMenu = DropdownMenuPrimitive.Root
+const DropdownMenu = (props: React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Root>) => (
+  <ClientOnly>
+    <DropdownMenuPrimitive.Root {...props} />
+  </ClientOnly>
+)
 
 const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger
 

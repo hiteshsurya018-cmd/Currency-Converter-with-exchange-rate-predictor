@@ -42,7 +42,7 @@ export function Sidebar({ open, onOpenChange }: SidebarProps) {
                   </a>
                 </Button>
                 <Button variant="ghost" className="justify-start" asChild>
-                  <a href="#chart">
+                  <a href="/#chart">
                     <History className="mr-2 h-4 w-4" />
                     Historical Chart
                   </a>
@@ -90,7 +90,7 @@ export function Sidebar({ open, onOpenChange }: SidebarProps) {
                       </a>
                     </Button>
                     <Button variant="ghost" className="justify-start" asChild>
-                      <a href="#chart">
+                      <a href="/#chart">
                         <History className="mr-2 h-4 w-4" />
                         Historical Chart
                       </a>

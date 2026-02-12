@@ -4,9 +4,14 @@ import * as React from "react"
 import * as SelectPrimitive from "@radix-ui/react-select"
 import { Check, ChevronDown, ChevronUp } from "lucide-react"
 
+import { ClientOnly } from "@/components/ui/client-only"
 import { cn } from "@/lib/utils"
 
-const Select = SelectPrimitive.Root
+const Select = (props: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Root>) => (
+  <ClientOnly>
+    <SelectPrimitive.Root {...props} />
+  </ClientOnly>
+)
 
 const SelectGroup = SelectPrimitive.Group
 
