@@ -1,4 +1,4 @@
-const API_BASE_URL = "https://api.frankfurter.app"
+const API_BASE_URL = "https://api.frankfurter.dev/v1"
 
 export async function fetchExchangeRate(from: string, to: string, amount: number) {
   try {

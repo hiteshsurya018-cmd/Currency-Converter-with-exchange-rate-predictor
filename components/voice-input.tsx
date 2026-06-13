@@ -12,21 +12,55 @@ interface VoiceInputProps {
 
 declare global {
   interface Window {
-    SpeechRecognition: any
-    webkitSpeechRecognition: any
+    SpeechRecognition?: SpeechRecognitionConstructor
+    webkitSpeechRecognition?: SpeechRecognitionConstructor
   }
+}
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionInstance
+
+interface SpeechRecognitionInstance {
+  continuous: boolean
+  interimResults: boolean
+  lang: string
+  onstart: (() => void) | null
+  onresult: ((event: SpeechRecognitionResultEvent) => void) | null
+  onend: (() => void) | null
+  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null
+  start: () => void
+  stop: () => void
+  abort: () => void
+}
+
+interface SpeechRecognitionResultEvent {
+  resultIndex: number
+  results: {
+    [index: number]: {
+      [index: number]: {
+        transcript: string
+      }
+    }
+  }
+}
+
+interface SpeechRecognitionErrorEvent {
+  error: string
 }
 
 export function VoiceInput({ onResult, onClose }: VoiceInputProps) {
   const [isListening, setIsListening] = useState(false)
   const [transcript, setTranscript] = useState("")
-  const [recognition, setRecognition] = useState<SpeechRecognition | null>(null)
+  const [recognition, setRecognition] = useState<SpeechRecognitionInstance | null>(null)
 
   useEffect(() => {
+    let recognitionInstance: SpeechRecognitionInstance | null = null
+
     // Check if browser supports SpeechRecognition
     if ("SpeechRecognition" in window || "webkitSpeechRecognition" in window) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-      const recognitionInstance = new SpeechRecognition()
+      if (!SpeechRecognition) return
+
+      recognitionInstance = new SpeechRecognition()
 
       recognitionInstance.continuous = false
       recognitionInstance.interimResults = true
@@ -56,9 +90,7 @@ export function VoiceInput({ onResult, onClose }: VoiceInputProps) {
     }
 
     return () => {
-      if (recognition) {
-        recognition.abort()
-      }
+      recognitionInstance?.abort()
     }
   }, [])
 

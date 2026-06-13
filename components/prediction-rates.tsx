@@ -16,8 +16,8 @@ type SeriesPoint = { date: string; rate: number }
 type ChartPoint = { date: string; actual?: number | null; predicted?: number | null }
 
 const HISTORY_DAYS = 365
-const LSTM_WINDOW = 15
-const LSTM_TRAINING_POINTS = 120
+const LSTM_WINDOW = 30
+const LSTM_TRAINING_POINTS = 180
 const LSTM_EPOCHS = 4
 const LSTM_BATCH_SIZE = 32
 const LSTM_UNITS = 8
@@ -203,7 +203,8 @@ async function runLstm(series: number[], horizon: number): Promise<number[]> {
     for (let i = 0; i < horizon; i += 1) {
       const output = tf.tidy(() => {
         const inputTensor = tf.tensor3d([window.map((v) => [v])], [1, LSTM_WINDOW, 1])
-        const outputTensor = model.predict(inputTensor) as typeof tf.Tensor
+        const prediction = model.predict(inputTensor)
+        const outputTensor = Array.isArray(prediction) ? prediction[0] : prediction
         return outputTensor.dataSync()[0]
       })
       predictions.push(output * scale + min)
