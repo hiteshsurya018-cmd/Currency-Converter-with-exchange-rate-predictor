@@ -16,11 +16,12 @@ type SeriesPoint = { date: string; rate: number }
 type ChartPoint = { date: string; actual?: number | null; predicted?: number | null }
 
 const HISTORY_DAYS = 365
-const LSTM_WINDOW = 10
-const LSTM_TRAINING_POINTS = 60
-const LSTM_EPOCHS = 2
+const LSTM_SEED = 42
+const LSTM_WINDOW = 14
+const LSTM_TRAINING_POINTS = 90
+const LSTM_EPOCHS = 3
 const LSTM_BATCH_SIZE = 16
-const LSTM_UNITS = 4
+const LSTM_UNITS = 6
 
 function difference(series: number[], d: number): number[] {
   let current = series.slice()
@@ -186,8 +187,22 @@ async function runLstm(
     const ysTensor = tf.tensor2d(ys, [ys.length, 1])
 
     const model = tf.sequential()
-    model.add(tf.layers.lstm({ units: LSTM_UNITS, inputShape: [LSTM_WINDOW, 1] }))
-    model.add(tf.layers.dense({ units: 1 }))
+    model.add(
+      tf.layers.lstm({
+        units: LSTM_UNITS,
+        inputShape: [LSTM_WINDOW, 1],
+        kernelInitializer: tf.initializers.glorotUniform({ seed: LSTM_SEED }),
+        recurrentInitializer: tf.initializers.orthogonal({ seed: LSTM_SEED + 1 }),
+        biasInitializer: tf.initializers.zeros(),
+      }),
+    )
+    model.add(
+      tf.layers.dense({
+        units: 1,
+        kernelInitializer: tf.initializers.glorotUniform({ seed: LSTM_SEED + 2 }),
+        biasInitializer: tf.initializers.zeros(),
+      }),
+    )
     model.compile({ optimizer: tf.train.adam(0.005), loss: "meanSquaredError" })
 
     try {
@@ -195,6 +210,7 @@ async function runLstm(
       await model.fit(xsTensor, ysTensor, {
         epochs: LSTM_EPOCHS,
         batchSize: LSTM_BATCH_SIZE,
+        shuffle: false,
         verbose: 0,
         callbacks: {
           onEpochEnd: async (epoch) => {
