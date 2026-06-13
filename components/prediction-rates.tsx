@@ -16,11 +16,11 @@ type SeriesPoint = { date: string; rate: number }
 type ChartPoint = { date: string; actual?: number | null; predicted?: number | null }
 
 const HISTORY_DAYS = 365
-const LSTM_WINDOW = 30
-const LSTM_TRAINING_POINTS = 180
-const LSTM_EPOCHS = 4
-const LSTM_BATCH_SIZE = 32
-const LSTM_UNITS = 8
+const LSTM_WINDOW = 10
+const LSTM_TRAINING_POINTS = 60
+const LSTM_EPOCHS = 2
+const LSTM_BATCH_SIZE = 16
+const LSTM_UNITS = 4
 
 function difference(series: number[], d: number): number[] {
   let current = series.slice()
@@ -143,10 +143,16 @@ async function runArima(series: number[], horizon: number): Promise<number[]> {
   return result
 }
 
-async function runLstm(series: number[], horizon: number): Promise<number[]> {
+async function runLstm(
+  series: number[],
+  horizon: number,
+  onStatus?: (status: string) => void,
+): Promise<number[]> {
+  onStatus?.("Loading TensorFlow...")
   const tf = await import("@tensorflow/tfjs")
 
   const runTraining = async () => {
+    onStatus?.("Preparing recent exchange-rate data...")
     await tf.ready()
 
     if (series.length < LSTM_WINDOW + 1) {
@@ -184,52 +190,53 @@ async function runLstm(series: number[], horizon: number): Promise<number[]> {
     model.add(tf.layers.dense({ units: 1 }))
     model.compile({ optimizer: tf.train.adam(0.005), loss: "meanSquaredError" })
 
-    await model.fit(xsTensor, ysTensor, {
-      epochs: LSTM_EPOCHS,
-      batchSize: LSTM_BATCH_SIZE,
-      verbose: 0,
-      callbacks:
-        typeof tf.callbacks?.earlyStopping === "function"
-          ? [tf.callbacks.earlyStopping({ monitor: "loss", patience: 1, minDelta: 1e-4 })]
-          : undefined,
-    })
-
-    xsTensor.dispose()
-    ysTensor.dispose()
-
-    const predictions: number[] = []
-    let window = normalized.slice(normalized.length - LSTM_WINDOW)
-
-    for (let i = 0; i < horizon; i += 1) {
-      const output = tf.tidy(() => {
-        const inputTensor = tf.tensor3d([window.map((v) => [v])], [1, LSTM_WINDOW, 1])
-        const prediction = model.predict(inputTensor)
-        const outputTensor = Array.isArray(prediction) ? prediction[0] : prediction
-        return outputTensor.dataSync()[0]
+    try {
+      onStatus?.("Training LSTM model...")
+      await model.fit(xsTensor, ysTensor, {
+        epochs: LSTM_EPOCHS,
+        batchSize: LSTM_BATCH_SIZE,
+        verbose: 0,
+        callbacks: {
+          onEpochEnd: async (epoch) => {
+            onStatus?.(`Training LSTM model (${epoch + 1}/${LSTM_EPOCHS})...`)
+            await tf.nextFrame()
+          },
+        },
       })
-      predictions.push(output * scale + min)
 
-      window = window.slice(1)
-      window.push(output)
+      onStatus?.("Generating forecast...")
+      const predictions: number[] = []
+      let window = normalized.slice(normalized.length - LSTM_WINDOW)
+
+      for (let i = 0; i < horizon; i += 1) {
+        const output = tf.tidy(() => {
+          const inputTensor = tf.tensor3d([window.map((v) => [v])], [1, LSTM_WINDOW, 1])
+          const prediction = model.predict(inputTensor)
+          const outputTensor = Array.isArray(prediction) ? prediction[0] : prediction
+          return outputTensor.dataSync()[0]
+        })
+        predictions.push(output * scale + min)
+
+        window = window.slice(1)
+        window.push(output)
+      }
+
+      return predictions
+    } finally {
+      xsTensor.dispose()
+      ysTensor.dispose()
+      model.dispose()
     }
-
-    model.dispose()
-    return predictions
   }
 
   try {
-    if (tf.getBackend() !== "webgl") {
-      await tf.setBackend("webgl")
+    if (tf.getBackend() !== "cpu") {
+      await tf.setBackend("cpu")
     }
     return await runTraining()
   } catch (error) {
-    try {
-      await tf.setBackend("cpu")
-      return await runTraining()
-    } catch (fallbackError) {
-      console.error("LSTM prediction failed.", fallbackError ?? error)
-      return []
-    }
+    console.error("LSTM prediction failed.", error)
+    return []
   }
 }
 
@@ -242,6 +249,7 @@ export function PredictionRates() {
   const [series, setSeries] = useState<SeriesPoint[]>([])
   const [predicted, setPredicted] = useState<number[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  const [predictionStatus, setPredictionStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<string | null>(null)
 
@@ -297,6 +305,7 @@ export function PredictionRates() {
     }
 
     setIsLoading(true)
+    setPredictionStatus(model === "lstm" ? "Starting LSTM..." : "Running ARIMA...")
     setError(null)
     setPredicted([])
 
@@ -305,7 +314,9 @@ export function PredictionRates() {
       const horizonValue = Number(horizon)
 
       const results =
-        model === "arima" ? await runArima(values, horizonValue) : await runLstm(values, horizonValue)
+        model === "arima"
+          ? await runArima(values, horizonValue)
+          : await runLstm(values, horizonValue, setPredictionStatus)
 
       if (!results.length) {
         setError("Prediction failed. Try a different model or longer history.")
@@ -316,6 +327,7 @@ export function PredictionRates() {
       setError("Prediction failed. Try a different model or horizon.")
     } finally {
       setIsLoading(false)
+      setPredictionStatus(null)
     }
   }
 
@@ -418,6 +430,7 @@ export function PredictionRates() {
             </Button>
           </div>
 
+          {predictionStatus && <div className="text-sm text-muted-foreground">{predictionStatus}</div>}
           {error && <div className="bg-destructive/10 text-destructive p-3 rounded-md">{error}</div>}
         </CardContent>
       </Card>
