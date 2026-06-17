@@ -18,10 +18,98 @@ type ChartPoint = { date: string; actual?: number | null; predicted?: number | n
 const HISTORY_DAYS = 365
 const LSTM_SEED = 42
 const LSTM_WINDOW = 14
-const LSTM_TRAINING_POINTS = 90
-const LSTM_EPOCHS = 3
+const LSTM_TRAINING_POINTS = 180
+const LSTM_EPOCHS = 8
 const LSTM_BATCH_SIZE = 16
-const LSTM_UNITS = 6
+const LSTM_UNITS = 10
+const LSTM_LEARNING_RATE = 0.002
+const MIN_LOG_RETURN_SCALE = 0.0005
+const MIN_DAILY_LOG_RETURN_LIMIT = Math.log(1.001)
+const MAX_DAILY_LOG_RETURN = Math.log(1.035)
+const LSTM_CONSTRAINT_WINDOW = 90
+const LSTM_MODEL_WEIGHT = 0.65
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+function mean(values: number[]): number {
+  if (values.length === 0) return 0
+  return values.reduce((sum, value) => sum + value, 0) / values.length
+}
+
+function standardDeviation(values: number[], average = mean(values)): number {
+  if (values.length < 2) return 0
+  const variance =
+    values.reduce((sum, value) => sum + (value - average) ** 2, 0) / (values.length - 1)
+  return Math.sqrt(variance)
+}
+
+function percentile(values: number[], p: number): number {
+  if (values.length === 0) return 0
+  const sorted = values.slice().sort((a, b) => a - b)
+  const index = clamp(Math.ceil((p / 100) * sorted.length) - 1, 0, sorted.length - 1)
+  return sorted[index]
+}
+
+function toLogReturns(series: number[]): number[] {
+  const returns: number[] = []
+
+  for (let i = 1; i < series.length; i += 1) {
+    const previous = series[i - 1]
+    const current = series[i]
+
+    if (previous > 0 && current > 0) {
+      const value = Math.log(current / previous)
+      if (Number.isFinite(value)) {
+        returns.push(value)
+      }
+    }
+  }
+
+  return returns
+}
+
+function getDailyReturnLimit(logReturns: number[], returnScale: number): number {
+  const absoluteReturns = logReturns.map(Math.abs)
+  return clamp(
+    Math.max(percentile(absoluteReturns, 90) * 1.25, returnScale * 2.25, MIN_DAILY_LOG_RETURN_LIMIT),
+    MIN_DAILY_LOG_RETURN_LIMIT,
+    MAX_DAILY_LOG_RETURN,
+  )
+}
+
+function clampForecastRate(
+  rate: number,
+  previousRate: number,
+  lastObservedRate: number,
+  recentRates: number[],
+  dailyReturnLimit: number,
+  stepIndex: number,
+): number {
+  if (!Number.isFinite(rate) || rate <= 0) return previousRate
+
+  const stepReturn = clamp(Math.log(rate / previousRate), -dailyReturnLimit, dailyReturnLimit)
+  const stepLimitedRate = previousRate * Math.exp(stepReturn)
+  const recentMin = Math.min(...recentRates)
+  const recentMax = Math.max(...recentRates)
+  const recentRange = Math.max(recentMax - recentMin, lastObservedRate * dailyReturnLimit)
+  const horizonScale = Math.sqrt(stepIndex + 1)
+  const volatilityRange = dailyReturnLimit * horizonScale * 2.25
+  const volatilityLower = lastObservedRate * Math.exp(-volatilityRange)
+  const volatilityUpper = lastObservedRate * Math.exp(volatilityRange)
+  const rangePadding = Math.max(recentRange * 0.2, lastObservedRate * dailyReturnLimit * horizonScale)
+  const rangeLower = Math.max(Number.EPSILON, Math.min(recentMin, lastObservedRate) - rangePadding)
+  const rangeUpper = Math.max(recentMax, lastObservedRate) + rangePadding
+  const lowerBound = Math.max(Number.EPSILON, volatilityLower, rangeLower)
+  const upperBound = Math.min(volatilityUpper, rangeUpper)
+
+  if (lowerBound >= upperBound) {
+    return clamp(stepLimitedRate, Math.max(Number.EPSILON, volatilityLower), volatilityUpper)
+  }
+
+  return clamp(stepLimitedRate, lowerBound, upperBound)
+}
 
 function difference(series: number[], d: number): number[] {
   let current = series.slice()
@@ -160,17 +248,24 @@ async function runLstm(
       return []
     }
 
+    const cleanedSeries = series.filter((value) => Number.isFinite(value) && value > 0)
     const trimmedSeries =
-      series.length > LSTM_TRAINING_POINTS ? series.slice(-LSTM_TRAINING_POINTS) : series
+      cleanedSeries.length > LSTM_TRAINING_POINTS
+        ? cleanedSeries.slice(-LSTM_TRAINING_POINTS)
+        : cleanedSeries
+    const logReturns = toLogReturns(trimmedSeries)
 
-    if (trimmedSeries.length < LSTM_WINDOW + 1) {
+    if (logReturns.length < LSTM_WINDOW + 1) {
       return []
     }
 
-    const min = Math.min(...trimmedSeries)
-    const max = Math.max(...trimmedSeries)
-    const scale = max - min || 1
-    const normalized = trimmedSeries.map((v) => (v - min) / scale)
+    const averageReturn = mean(logReturns)
+    const returnScale = Math.max(standardDeviation(logReturns, averageReturn), MIN_LOG_RETURN_SCALE)
+    const dailyReturnLimit = getDailyReturnLimit(logReturns, returnScale)
+    const normalizeReturn = (value: number) => clamp((value - averageReturn) / returnScale, -3, 3)
+    const denormalizeReturn = (value: number) =>
+      clamp(averageReturn + clamp(value, -3, 3) * returnScale, -dailyReturnLimit, dailyReturnLimit)
+    const normalized = logReturns.map(normalizeReturn)
 
     const xs: number[][] = []
     const ys: number[] = []
@@ -203,7 +298,7 @@ async function runLstm(
         biasInitializer: tf.initializers.zeros(),
       }),
     )
-    model.compile({ optimizer: tf.train.adam(0.005), loss: "meanSquaredError" })
+    model.compile({ optimizer: tf.train.adam(LSTM_LEARNING_RATE), loss: "meanSquaredError" })
 
     try {
       onStatus?.("Training LSTM model...")
@@ -223,6 +318,10 @@ async function runLstm(
       onStatus?.("Generating forecast...")
       const predictions: number[] = []
       let window = normalized.slice(normalized.length - LSTM_WINDOW)
+      const lastObservedRate = trimmedSeries[trimmedSeries.length - 1]
+      const recentRates = trimmedSeries.slice(-LSTM_CONSTRAINT_WINDOW)
+      let lastRate = lastObservedRate
+      const recentDrift = clamp(mean(logReturns.slice(-LSTM_WINDOW)), -dailyReturnLimit, dailyReturnLimit)
 
       for (let i = 0; i < horizon; i += 1) {
         const output = tf.tidy(() => {
@@ -231,10 +330,31 @@ async function runLstm(
           const outputTensor = Array.isArray(prediction) ? prediction[0] : prediction
           return outputTensor.dataSync()[0]
         })
-        predictions.push(output * scale + min)
+        const modelReturn = denormalizeReturn(Number.isFinite(output) ? output : normalizeReturn(recentDrift))
+        const modelWeight = LSTM_MODEL_WEIGHT * (1 - (i / Math.max(horizon - 1, 1)) * 0.4)
+        const nextReturn = clamp(
+          modelReturn * modelWeight + recentDrift * (1 - modelWeight),
+          -dailyReturnLimit,
+          dailyReturnLimit,
+        )
+        const nextRate = clampForecastRate(
+          lastRate * Math.exp(nextReturn),
+          lastRate,
+          lastObservedRate,
+          recentRates,
+          dailyReturnLimit,
+          i,
+        )
+
+        if (!Number.isFinite(nextRate) || nextRate <= 0) {
+          return predictions
+        }
+
+        predictions.push(nextRate)
 
         window = window.slice(1)
-        window.push(output)
+        window.push(normalizeReturn(Math.log(nextRate / lastRate)))
+        lastRate = nextRate
       }
 
       return predictions
